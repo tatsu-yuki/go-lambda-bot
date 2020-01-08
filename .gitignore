@@ -1,4 +1,5 @@
 .idea
 .env
 *.zip
+*_build
 main

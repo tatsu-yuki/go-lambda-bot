@@ -105,7 +105,7 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 			}
 		}
 	}
-	return events.APIGatewayProxyResponse{Body: nil, StatusCode: http.StatusOK}, nil
+	return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
 }
 
 func requestSummary(text string) (*http.Response, error) {
