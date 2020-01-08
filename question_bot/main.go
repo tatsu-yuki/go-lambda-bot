@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
@@ -74,34 +73,39 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	}
 
 	for _, event := range myLineRequest.Events {
-		if event.Type == linebot.EventTypeMessage {
+		switch event.Type {
+		case linebot.EventTypeMessage:
 			switch message := event.Message.(type) {
 			case *linebot.TextMessage:
-				resp, err := requestSummary(message.Text)
-				if err != nil {
-					tmpReplyMessage := "要約できませんでした。もう一度入力してください。"
-					if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
-						return events.APIGatewayProxyResponse{Body: err.Error(), StatusCode: http.StatusInternalServerError}, nil
-					}
-					return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+				bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTemplateMessage(message.Text)).Do()
+				if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(message.Text)).Do(); err != nil {
+					return events.APIGatewayProxyResponse{Body: err.Error(), StatusCode: http.StatusInternalServerError}, nil
 				}
-				body, err := ioutil.ReadAll(resp.Body)
-				if err != nil {
-					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
-				}
-
-				b, err := UnmarshalSummary(body)
-				if err != nil {
-					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
-				}
-
-				fmt.Println("*** reply")
-				tmpReplyMessage := "要約：" + b.Summary[0]
-				if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
-					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
-				}
-
 				return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+
+			case *linebot.StickerMessage:
+				log.Print("This is a StickerMessage.")
+
+			case *linebot.TemplateMessage:
+				log.Print("This is a TemplateMessage.")
+
+			case *linebot.VideoMessage:
+				log.Print("This is a VideoMessage.")
+
+			case *linebot.AudioMessage:
+				log.Print("This is a AudioMessage.")
+
+			case *linebot.FileMessage:
+				log.Print("This is a FileMessage.")
+
+			case *linebot.LocationMessage:
+				log.Print("This is a LocationMessage.")
+			}
+
+		case linebot.EventTypePostback:
+			data := event.Postback.Data
+			if err := postbackHandler(data); err != nil {
+				log.Println(err)
 			}
 		}
 	}
