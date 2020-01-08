@@ -28,27 +28,7 @@ func (r *LineRequest) Marshal() ([]byte, error) {
 }
 
 type LineRequest struct {
-	Events      []Event `json:"events"`
-	Destination string  `json:"destination"`
-}
-
-type Event struct {
-	Type       string  `json:"type"`
-	ReplyToken string  `json:"replyToken"`
-	Source     Source  `json:"source"`
-	Timestamp  int64   `json:"timestamp"`
-	Message    Message `json:"message"`
-}
-
-type Message struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
-	Text string `json:"text"`
-}
-
-type Source struct {
-	UserID string `json:"userId"`
-	Type   string `json:"type"`
+	Events []linebot.Event `json:"events"`
 }
 
 func UnmarshalSummary(data []byte) (SummaryResponse, error) {
@@ -93,39 +73,46 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
 	}
 
-	resp, err := requestSummary(myLineRequest)
-	if err != nil {
-		tmpReplyMessage := "要約できませんでした。もう一度入力してください。"
-		if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
-			return events.APIGatewayProxyResponse{Body: err.Error(), StatusCode: http.StatusInternalServerError}, nil
+	for _, event := range myLineRequest.Events {
+		if event.Type == linebot.EventTypeMessage {
+			switch message := event.Message.(type) {
+			case *linebot.TextMessage:
+				resp, err := requestSummary(message.Text)
+				if err != nil {
+					tmpReplyMessage := "要約できませんでした。もう一度入力してください。"
+					if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
+						return events.APIGatewayProxyResponse{Body: err.Error(), StatusCode: http.StatusInternalServerError}, nil
+					}
+					return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+				}
+				body, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
+				}
+
+				b, err := UnmarshalSummary(body)
+				if err != nil {
+					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
+				}
+
+				fmt.Println("*** reply")
+				tmpReplyMessage := "要約：" + b.Summary[0]
+				if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
+					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
+				}
+
+				return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+			}
 		}
-		return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
 	}
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
-	}
-
-	b, err := UnmarshalSummary(body)
-	if err != nil {
-		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
-	}
-
-	fmt.Println("*** reply")
-	tmpReplyMessage := "要約：" + b.Summary[0]
-	if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
-		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
-	}
-
-	return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+	return events.APIGatewayProxyResponse{Body: nil, StatusCode: http.StatusOK}, nil
 }
 
-func requestSummary(myLineRequest LineRequest) (*http.Response, error) {
+func requestSummary(text string) (*http.Response, error) {
 	apiUrl := "https://api.a3rt.recruit-tech.co.jp/text_summarization/v1"
 	data := url.Values{}
 	data.Set("apikey", SummaryApiKey)
-	data.Set("sentences", myLineRequest.Events[0].Message.Text)
+	data.Set("sentences", text)
 
 	client := &http.Client{}
 	r, err := http.NewRequest("POST", apiUrl, strings.NewReader(data.Encode())) // URL-encoded payload

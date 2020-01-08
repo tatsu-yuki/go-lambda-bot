@@ -3,12 +3,18 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
+
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/line/line-bot-sdk-go/linebot"
-	"log"
-	"net/http"
-	"os"
+	"github.com/pkg/errors"
 )
 
 func UnmarshalLineRequest(data []byte) (LineRequest, error) {
@@ -22,27 +28,7 @@ func (r *LineRequest) Marshal() ([]byte, error) {
 }
 
 type LineRequest struct {
-	Events      []Event `json:"events"`
-	Destination string  `json:"destination"`
-}
-
-type Event struct {
-	Type       string  `json:"type"`
-	ReplyToken string  `json:"replyToken"`
-	Source     Source  `json:"source"`
-	Timestamp  int64   `json:"timestamp"`
-	Message    Message `json:"message"`
-}
-
-type Message struct {
-	Type string `json:"type"`
-	ID   string `json:"id"`
-	Text string `json:"text"`
-}
-
-type Source struct {
-	UserID string `json:"userId"`
-	Type   string `json:"type"`
+	Events []linebot.Event `json:"events"`
 }
 
 func UnmarshalSummary(data []byte) (SummaryResponse, error) {
@@ -77,11 +63,6 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	log.Print("*** body")
 	log.Println(request.Body)
 
-	leftBtn := linebot.NewMessageAction("left", "left clicked")
-	rightBtn := linebot.NewMessageAction("right", "right clicked")
-	template := linebot.NewConfirmTemplate("Hello World", leftBtn, rightBtn)
-	message := linebot.NewTemplateMessage("Sorry :(, please update your app.", template)
-
 	myLineRequest, err := UnmarshalLineRequest([]byte(request.Body))
 	if err != nil {
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
@@ -92,17 +73,62 @@ func Handler(request events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
 	}
 
-	fmt.Println("*** reply")
-	var messages []linebot.SendingMessage
+	for _, event := range myLineRequest.Events {
+		if event.Type == linebot.EventTypeMessage {
+			switch message := event.Message.(type) {
+			case *linebot.TextMessage:
+				resp, err := requestSummary(message.Text)
+				if err != nil {
+					tmpReplyMessage := "要約できませんでした。もう一度入力してください。"
+					if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
+						return events.APIGatewayProxyResponse{Body: err.Error(), StatusCode: http.StatusInternalServerError}, nil
+					}
+					return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+				}
+				body, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
+				}
 
-	messages = append(messages, message)
+				b, err := UnmarshalSummary(body)
+				if err != nil {
+					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
+				}
 
-	// append some message to messages
-	_, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, messages...).Do()
-	if err != nil {
-		return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
+				fmt.Println("*** reply")
+				tmpReplyMessage := "要約：" + b.Summary[0]
+				if _, err = bot.ReplyMessage(myLineRequest.Events[0].ReplyToken, linebot.NewTextMessage(tmpReplyMessage)).Do(); err != nil {
+					return events.APIGatewayProxyResponse{StatusCode: http.StatusInternalServerError}, nil
+				}
+
+				return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+			}
+		}
 	}
-	return events.APIGatewayProxyResponse{Body: request.Body, StatusCode: http.StatusOK}, nil
+	return events.APIGatewayProxyResponse{Body: nil, StatusCode: http.StatusOK}, nil
+}
+
+func requestSummary(text string) (*http.Response, error) {
+	apiUrl := "https://api.a3rt.recruit-tech.co.jp/text_summarization/v1"
+	data := url.Values{}
+	data.Set("apikey", SummaryApiKey)
+	data.Set("sentences", text)
+
+	client := &http.Client{}
+	r, err := http.NewRequest("POST", apiUrl, strings.NewReader(data.Encode())) // URL-encoded payload
+	if err != nil {
+		return nil, errors.New("fail to create NewRequest.")
+	}
+	r.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Add("Content-Length", strconv.Itoa(len(data.Encode())))
+	resp, err := client.Do(r)
+	if err != nil {
+		return nil, errors.New("fail to request.")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(fmt.Sprintf("response status code is not http.StatusOK. status code is: %d", resp.StatusCode))
+	}
+	return resp, nil
 }
 
 func main() {
